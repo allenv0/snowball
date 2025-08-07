@@ -1,0 +1,10 @@
+{
+  "name": "snowball",
+  "version": "1.0.0",
+  "description": "Interactive image viewer with drag and resize functionality",
+  "scripts": {
+    "build": "./build.sh"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

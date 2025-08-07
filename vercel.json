@@ -1,0 +1,5 @@
+{
+  "buildCommand": "python3 lister.py",
+  "outputDirectory": ".",
+  "installCommand": "pip3 install pillow pillow-heif"
+}

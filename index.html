@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snowball - Media Organized</title>
+    
+    <!-- Modular CSS -->
+    <link rel="stylesheet" href="styles/main.css">
+    <link rel="stylesheet" href="styles/components.css">
+    <link rel="stylesheet" href="styles/themes.css">
+    
+    <!-- Preload critical resources -->
+    <link rel="preload" href="image_widths_heights.json" as="fetch" crossorigin>
+</head>
+<body>
+    <!-- Add any text here if you so desire; the images won't be drawn over it. -->
+    
+    <!-- Main container for images -->
+    <div id="container"></div>
+    
+    <!-- Modular JavaScript -->
+    <script type="module">
+        // Import modules
+        import { EventBus } from './scripts/core/EventBus.js';
+        import { StorageManager } from './scripts/core/StorageManager.js';
+        import { StateManager } from './scripts/core/StateManager.js';
+        import { ImageContainer } from './scripts/components/ImageContainer.js';
+        import { ThemeToggle } from './scripts/components/ThemeToggle.js';
+        import { ResetButton } from './scripts/components/ResetButton.js';
+        import { SavedIndicator } from './scripts/components/SavedIndicator.js';
+        import { DragHandler } from './scripts/interactions/DragHandler.js';
+        import { ResizeHandler } from './scripts/interactions/ResizeHandler.js';
+
+        class SnowballApp {
+            constructor() {
+                this.eventBus = new EventBus();
+                this.storageManager = new StorageManager();
+                this.stateManager = new StateManager(this.eventBus, this.storageManager);
+                this.container = document.getElementById('container');
+                this.positions = [];
+                this.containers = new Map();
+                this.dragHandler = new DragHandler(this.eventBus, this);
+                this.resizeHandler = new ResizeHandler(this.eventBus, this);
+                
+                // UI Components
+                this.themeToggle = new ThemeToggle(this.eventBus, this.stateManager);
+                this.resetButton = new ResetButton(this.eventBus, this.stateManager);
+                this.savedIndicator = new SavedIndicator(this.eventBus);
+                
+                // Enable debug mode if requested
+                if (new URLSearchParams(window.location.search).has('debug')) {
+                    this.setDebugMode(true);
+                }
+            }
+
+            setDebugMode(enabled) {
+                this.eventBus.setDebugMode(enabled);
+                this.storageManager.setDebugMode(enabled);
+                this.stateManager.setDebugMode(enabled);
+                this.dragHandler.setDebugMode(enabled);
+                this.resizeHandler.setDebugMode(enabled);
+                this.themeToggle.setDebugMode(enabled);
+                this.resetButton.setDebugMode(enabled);
+                this.savedIndicator.setDebugMode(enabled);
+            }
+
+            async init() {
+                try {
+                    console.log('SnowballApp: Starting initialization...');
+                    
+                    // Render UI components
+                    this.themeToggle.render();
+                    this.resetButton.render();
+                    this.savedIndicator.render();
+                    
+                    // Apply saved theme
+                    const savedTheme = this.stateManager.getTheme();
+                    this.themeToggle.setTheme(savedTheme);
+                    
+                    // Set up event listeners
+                    this.setupEventListeners();
+                    
+                    // Load images
+                    await this.loadImages();
+                    
+                    console.log('SnowballApp: Initialization complete');
+                    this.eventBus.emit('app:ready', { timestamp: Date.now() });
+                    
+                } catch (error) {
+                    console.error('SnowballApp: Initialization failed:', error);
+                }
+            }
+
+            setupEventListeners() {
+                this.eventBus.on('drag:end', this.handleDragEnd.bind(this));
+                this.eventBus.on('resize:end', this.handleResizeEnd.bind(this));
+                this.eventBus.on('positions:reset', this.handleReset.bind(this));
+            }
+
+            async loadImages() {
+                console.log('SnowballApp: Loading images...');
+                
+                // Load metadata
+                const response = await fetch('image_widths_heights.json');
+                const data = await response.json();
+                console.log('SnowballApp: Loaded metadata for', data.length, 'images');
+
+                // Check for saved states
+                const savedStates = this.stateManager.getAllImageStates();
+                const hasSavedStates = Object.keys(savedStates).length > 0;
+                
+                // Shuffle if no saved states
+                const processedData = hasSavedStates ? data : this.shuffleArray([...data]);
+
+                // Load images progressively
+                for (let i = 0; i < processedData.length; i++) {
+                    const [filename, [width, height]] = processedData[i];
+                    
+                    try {
+                        await this.loadImage(filename, width, height, i);
+                        console.log(`SnowballApp: Loaded ${i + 1}/${processedData.length}: ${filename}`);
+                        
+                        // Add delay between images
+                        if (i < processedData.length - 1) {
+                            await this.delay(100);
+                        }
+                    } catch (error) {
+                        console.error(`SnowballApp: Failed to load ${filename}:`, error);
+                    }
+                }
+
+                console.log('SnowballApp: All images loaded');
+            }
+
+            async loadImage(filename, originalWidth, originalHeight, index) {
+                // Calculate scaled size
+                const goalPixels = 150000;
+                const actualPixels = originalWidth * originalHeight;
+                let scaledWidth, scaledHeight;
+
+                if (actualPixels / goalPixels > 16) {
+                    scaledWidth = Math.floor(originalWidth / 8);
+                    scaledHeight = Math.floor(originalHeight / 8);
+                } else if (actualPixels / goalPixels > 4) {
+                    scaledWidth = Math.floor(originalWidth / 4);
+                    scaledHeight = Math.floor(originalHeight / 4);
+                } else {
+                    scaledWidth = Math.floor(originalWidth / 2);
+                    scaledHeight = Math.floor(originalHeight / 2);
+                }
+
+                // Ensure width doesn't exceed screen width
+                const screenWidth = this.container.getBoundingClientRect().width || window.innerWidth;
+                if (scaledWidth + 10 > screenWidth) {
+                    scaledWidth = screenWidth - 10;
+                    scaledHeight = Math.floor(scaledHeight * (scaledWidth / (originalWidth / 2)));
+                }
+
+                // Check for saved state
+                const savedState = this.stateManager.getImageState(filename);
+                let position, size;
+
+                if (savedState) {
+                    position = savedState.position;
+                    size = savedState.size;
+                } else {
+                    position = this.calculatePosition(scaledWidth, scaledHeight, index);
+                    size = [scaledWidth, scaledHeight];
+                }
+
+                this.positions.push(position);
+
+                // Create image container
+                const container = new ImageContainer(
+                    filename,
+                    {
+                        width: size[0],
+                        height: size[1],
+                        originalWidth: originalWidth,
+                        originalHeight: originalHeight
+                    },
+                    index,
+                    this.eventBus
+                );
+
+                // Render and position
+                const element = container.render();
+                container.setPosition(position[0], position[1]);
+                container.setSize(size[0], size[1]);
+
+                // Attach interaction handlers
+                this.dragHandler.attachTo(element, index);
+                this.resizeHandler.attachTo(element, index);
+
+                // Add to DOM
+                this.container.appendChild(element);
+
+                // Store reference
+                this.containers.set(filename, container);
+            }
+
+            calculatePosition(width, height, index) {
+                const screenWidth = this.container.getBoundingClientRect().width || window.innerWidth;
+                const minSpacing = 20;
+                
+                // Simple grid placement with overlap detection
+                let searchHeight = 600;
+                
+                while (searchHeight < 5000) {
+                    for (let y = 0; y <= searchHeight - height; y += 50) {
+                        for (let x = 0; x <= screenWidth - width; x += 50) {
+                            if (!this.wouldOverlap(x, y, width, height)) {
+                                return [x, y];
+                            }
+                        }
+                    }
+                    searchHeight += 100;
+                }
+                
+                // Fallback: simple grid
+                const cols = Math.max(1, Math.floor(screenWidth / (width + minSpacing)));
+                const row = Math.floor(index / cols);
+                const col = index % cols;
+                
+                return [col * (width + minSpacing), row * (height + minSpacing)];
+            }
+
+            wouldOverlap(x, y, width, height) {
+                const minSpacing = 20;
+                
+                for (let i = 0; i < this.positions.length; i++) {
+                    const [otherX, otherY] = this.positions[i];
+                    const otherContainer = Array.from(this.containers.values())[i];
+                    if (!otherContainer) continue;
+                    
+                    const otherSize = otherContainer.getSize();
+                    const [otherWidth, otherHeight] = otherSize;
+                    
+                    if (x < (otherX + otherWidth + minSpacing) && 
+                        (x + width + minSpacing) > otherX && 
+                        (y + height + minSpacing) > otherY && 
+                        y < (otherY + otherHeight + minSpacing)) {
+                        return true;
+                    }
+                }
+                
+                return false;
+            }
+
+            handleDragEnd(data) {
+                const { index, position } = data;
+                this.positions[index] = [position.x, position.y];
+                
+                const filename = this.getFilenameByIndex(index);
+                if (filename) {
+                    const container = this.containers.get(filename);
+                    const size = container ? container.getSize() : [100, 100];
+                    this.stateManager.setImageState(filename, {
+                        position: [position.x, position.y],
+                        size: size
+                    });
+                }
+            }
+
+            handleResizeEnd(data) {
+                const { index, size } = data;
+                
+                const filename = this.getFilenameByIndex(index);
+                if (filename) {
+                    const container = this.containers.get(filename);
+                    const position = container ? container.getPosition() : [0, 0];
+                    this.stateManager.setImageState(filename, {
+                        position: position,
+                        size: [size.width, size.height]
+                    });
+                }
+            }
+
+            handleReset() {
+                // Clear containers
+                for (const container of this.containers.values()) {
+                    container.destroy();
+                }
+                this.containers.clear();
+                this.positions = [];
+                this.container.innerHTML = '';
+                
+                // Reload images
+                this.loadImages();
+            }
+
+            getFilenameByIndex(index) {
+                const containers = Array.from(this.containers.entries());
+                for (const [filename, container] of containers) {
+                    if (container.getIndex() === index) {
+                        return filename;
+                    }
+                }
+                return null;
+            }
+
+            shuffleArray(array) {
+                for (let i = array.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [array[i], array[j]] = [array[j], array[i]];
+                }
+                return array;
+            }
+
+            delay(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
+        }
+
+        // Initialize app
+        const app = new SnowballApp();
+        
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => app.init());
+        } else {
+            app.init();
+        }
+
+        // Make available for debugging
+        window.SnowballApp = app;
+    </script>
+    
+    <!-- Fallback for browsers without module support -->
+    <script nomodule>
+        document.body.innerHTML = '<div style="text-align: center; padding: 50px; font-family: Arial, sans-serif;"><h2>Browser Not Supported</h2><p>This application requires a modern browser with ES6 module support.</p><p>Please update your browser or use Chrome, Firefox, Safari, or Edge.</p></div>';
+    </script>
+</body>
+</html>
