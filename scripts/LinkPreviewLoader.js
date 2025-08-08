@@ -31,19 +31,37 @@ export class LinkPreviewLoader {
         }
 
         try {
-            // Try to fetch real metadata with timeout
+            // Try to fetch real metadata with timeout and retry
             const preview = await Promise.race([
                 this.fetchRealMetadata(url),
                 new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Timeout')), 5000)
+                    setTimeout(() => reject(new Error('Request timeout after 8 seconds')), 8000)
                 )
             ]);
+            
+            console.log('Successfully fetched metadata for:', url);
             this.cache.set(url, preview);
             return preview;
+            
         } catch (error) {
-            console.error('Failed to fetch real metadata for:', url, error.message);
+            console.warn(`Metadata fetch failed for ${url}:`, error.message);
+            
+            // Use enhanced fallback with domain-specific info
             const fallback = this.generateFallbackPreview(url);
             this.cache.set(url, fallback);
+            
+            // Still try to get favicon even if metadata failed
+            try {
+                const faviconUrl = `${new URL(url).origin}/favicon.ico`;
+                // Test if favicon exists
+                const faviconTest = await fetch(faviconUrl, { method: 'HEAD' });
+                if (faviconTest.ok) {
+                    fallback.favicon = faviconUrl;
+                }
+            } catch (faviconError) {
+                // Favicon test failed, keep default
+            }
+            
             return fallback;
         }
     }
@@ -51,74 +69,100 @@ export class LinkPreviewLoader {
     async fetchRealMetadata(url) {
         console.log('Fetching real metadata for:', url);
         
-        try {
-            // Use a reliable metadata API service
-            const apiUrl = `https://jsonlink.io/api/extract?url=${encodeURIComponent(url)}`;
-            
-            const response = await fetch(apiUrl, {
-                method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (compatible; LinkPreview/1.0)'
+        // Try multiple APIs in sequence for better production reliability
+        const apis = [
+            {
+                name: 'LinkPreview',
+                url: `https://api.linkpreview.net/?key=demo&q=${encodeURIComponent(url)}`,
+                parser: (data) => ({
+                    title: data.title,
+                    description: data.description,
+                    image: data.image,
+                    favicon: data.favicon,
+                    siteName: data.url ? new URL(data.url).hostname : this.getDomain(url),
+                    type: 'website'
+                })
+            },
+            {
+                name: 'OpenGraph',
+                url: `https://opengraph.io/api/1.1/site/${encodeURIComponent(url)}?app_id=demo`,
+                parser: (data) => ({
+                    title: data.hybridGraph?.title || data.openGraph?.title,
+                    description: data.hybridGraph?.description || data.openGraph?.description,
+                    image: data.hybridGraph?.image || data.openGraph?.image?.[0]?.url,
+                    favicon: data.hybridGraph?.favicon,
+                    siteName: data.hybridGraph?.site_name || data.openGraph?.site_name,
+                    type: data.openGraph?.type || 'website'
+                })
+            },
+            {
+                name: 'AllOrigins',
+                url: `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+                parser: (data) => {
+                    if (!data.contents) throw new Error('No content');
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(data.contents, 'text/html');
+                    const metadata = this.extractMetadata(doc, url);
+                    return {
+                        title: metadata.title,
+                        description: metadata.description,
+                        image: metadata.image,
+                        favicon: metadata.favicon,
+                        siteName: metadata.siteName,
+                        type: metadata.type
+                    };
                 }
-            });
-            
-            if (!response.ok) {
-                throw new Error(`API responded with ${response.status}`);
             }
-            
-            const data = await response.json();
-            console.log('API response:', data);
-            
-            if (!data || data.error) {
-                throw new Error(data?.error || 'Invalid API response');
-            }
-            
-            const extractedImage = data.images?.[0] || data.image || data.thumbnail;
-            console.log('Extracted image for', url, ':', extractedImage);
-            
-            return {
-                title: data.title || data.domain || this.getDomain(url),
-                description: data.description || data.excerpt || '',
-                image: extractedImage,
-                favicon: data.favicon || `${new URL(url).origin}/favicon.ico`,
-                siteName: data.domain || this.getDomain(url),
-                type: data.type || 'website'
-            };
-            
-        } catch (apiError) {
-            console.log('Primary API failed, trying backup method:', apiError.message);
-            
-            // Fallback to CORS proxy method
+        ];
+
+        for (const api of apis) {
             try {
-                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-                const response = await fetch(proxyUrl);
+                console.log(`Trying ${api.name} API for:`, url);
+                
+                const response = await fetch(api.url, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (compatible; SnowballApp/1.0)'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`${api.name} API responded with ${response.status}`);
+                }
+                
                 const data = await response.json();
                 
-                if (!data.contents) {
-                    throw new Error('No content from proxy');
+                if (data.error) {
+                    throw new Error(data.error);
                 }
-
-                const parser = new DOMParser();
-                const doc = parser.parseFromString(data.contents, 'text/html');
-                const metadata = this.extractMetadata(doc, url);
                 
-                console.log('Extracted metadata via proxy:', metadata);
+                const parsed = api.parser(data);
+                
+                // Validate that we got some useful data
+                if (!parsed.title && !parsed.image) {
+                    throw new Error('No useful metadata extracted');
+                }
+                
+                console.log(`${api.name} API success:`, parsed);
                 
                 return {
-                    title: metadata.title || this.getDomain(url),
-                    description: metadata.description || '',
-                    image: metadata.image,
-                    favicon: metadata.favicon || `${new URL(url).origin}/favicon.ico`,
-                    siteName: metadata.siteName || this.getDomain(url),
-                    type: metadata.type || 'website'
+                    title: parsed.title || this.getDomain(url),
+                    description: parsed.description || '',
+                    image: parsed.image,
+                    favicon: parsed.favicon || `${new URL(url).origin}/favicon.ico`,
+                    siteName: parsed.siteName || this.getDomain(url),
+                    type: parsed.type || 'website'
                 };
                 
-            } catch (proxyError) {
-                console.log('Proxy method also failed:', proxyError.message);
-                throw new Error('All metadata fetching methods failed');
+            } catch (apiError) {
+                console.log(`${api.name} API failed:`, apiError.message);
+                continue; // Try next API
             }
         }
+        
+        // If all APIs failed, throw error
+        throw new Error('All metadata APIs failed or are blocked');
     }
 
     extractMetadata(doc, url) {
@@ -231,9 +275,38 @@ export class LinkPreviewLoader {
     generateFallbackPreview(url) {
         const domain = this.getDomain(url);
         
+        // Create a more informative fallback based on domain
+        const domainInfo = {
+            'yttl.network': {
+                title: 'YTTL Network',
+                description: 'Professional networking and technology solutions platform.'
+            },
+            'airposture.pro': {
+                title: 'Air Posture Pro', 
+                description: 'Advanced air quality monitoring and posture analysis tools.'
+            },
+            'github.com': {
+                title: 'GitHub',
+                description: 'Code hosting and collaboration platform.'
+            },
+            'linkedin.com': {
+                title: 'LinkedIn',
+                description: 'Professional networking platform.'
+            },
+            'twitter.com': {
+                title: 'Twitter',
+                description: 'Social media and microblogging platform.'
+            }
+        };
+        
+        const info = domainInfo[domain] || {
+            title: domain.charAt(0).toUpperCase() + domain.slice(1).replace(/\./g, ' '),
+            description: 'Click to visit this website'
+        };
+        
         return {
-            title: domain,
-            description: 'Unable to fetch website metadata',
+            title: info.title,
+            description: info.description,
             image: null,
             favicon: `${new URL(url).origin}/favicon.ico`,
             siteName: domain,
