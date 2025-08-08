@@ -21,6 +21,7 @@
 - **GIF Support**: Displays animated GIFs with special indicators
 - **Persistent Layout**: Remembers your custom positions and sizes
 - **Dark/Light Mode**: Toggle between themes
+- **Links**: Simple markdown file with your URLs
 
 
 

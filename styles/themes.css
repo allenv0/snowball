@@ -38,6 +38,14 @@ img {
     
     /* Glass morphism colors */
     --glass-bg: rgba(255, 255, 255, 0.15);
+    
+    /* Link card colors */
+    --link-card-bg: #ffffff;
+    --link-card-text-primary: #1a1a1a;
+    --link-card-text-secondary: #667eea;
+    --link-card-text-muted: #666666;
+    --link-card-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    --link-card-shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.25);
     --glass-border: rgba(255, 255, 255, 0.2);
     --glass-hover: rgba(255, 255, 255, 0.25);
     --glass-active: rgba(255, 255, 255, 0.35);
@@ -75,6 +83,19 @@ html.dark-mode {
     --border-hover: rgba(255, 255, 255, 0.2);
     --shadow-color: rgba(0, 0, 0, 0.3);
     --shadow-light: 0 8px 32px rgba(0, 0, 0, 0.6);
+    --shadow-medium: 0 12px 48px rgba(0, 0, 0, 0.8);
+    --shadow-heavy: 0 16px 64px rgba(0, 0, 0, 0.9);
+    
+    /* Glass morphism colors */
+    --glass-bg: rgba(255, 255, 255, 0.05);
+    
+    /* Link card colors */
+    --link-card-bg: #2a2a2a;
+    --link-card-text-primary: #e0e0e0;
+    --link-card-text-secondary: #8b9cf7;
+    --link-card-text-muted: #b0b0b0;
+    --link-card-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    --link-card-shadow-hover: 0 8px 30px rgba(0, 0, 0, 0.6);
     --shadow-medium: 0 12px 48px rgba(0, 0, 0, 0.7);
     --shadow-heavy: 0 16px 64px rgba(0, 0, 0, 0.8);
     
